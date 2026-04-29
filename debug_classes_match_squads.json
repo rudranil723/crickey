@@ -1,0 +1,144 @@
+{
+  "classes": [
+    "adsbygoogle",
+    "adsbygoogle-noablate",
+    "b-footer",
+    "bgContainer",
+    "bgImage",
+    "col-12",
+    "collapse",
+    "container",
+    "footer",
+    "footer-CElogo",
+    "footer-link",
+    "headText",
+    "header",
+    "header-wrapper",
+    "header-wrapper-top",
+    "light",
+    "min-height-wrap",
+    "mob-none",
+    "mr-auto",
+    "name",
+    "nav-item",
+    "nav-link",
+    "navbar",
+    "navbar-brand",
+    "navbar-expand-lg",
+    "navbar-nav",
+    "no-gutters",
+    "notFoundButton",
+    "notFoundDesc",
+    "notFoundSubtitle",
+    "notFoundText",
+    "notFoundTitle",
+    "order-1",
+    "order-md-1",
+    "playerimg",
+    "r-shift",
+    "row",
+    "show",
+    "sr-only",
+    "theme-icon",
+    "theme-text",
+    "theme-toggle-wrap",
+    "theme-wrap"
+  ],
+  "elements": [
+    {
+      "tag": "LI",
+      "cls": "nav-item",
+      "text": "Home\n(Current)"
+    },
+    {
+      "tag": "SPAN",
+      "cls": "sr-only",
+      "text": "(Current)"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item",
+      "text": "Series"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item",
+      "text": "Teams"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item",
+      "text": "Fixtures"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item",
+      "text": "🏏 Stats Corner"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item mob-none",
+      "text": "Rankings"
+    },
+    {
+      "tag": "LI",
+      "cls": "nav-item mob-none",
+      "text": "News"
+    },
+    {
+      "tag": "LI",
+      "cls": "theme-toggle-wrap",
+      "text": "Dark"
+    },
+    {
+      "tag": "SPAN",
+      "cls": "",
+      "text": "Dark"
+    },
+    {
+      "tag": "LI",
+      "cls": "",
+      "text": "About"
+    },
+    {
+      "tag": "LI",
+      "cls": "",
+      "text": "Grievance"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Refund Policy"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Contest Terms"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Editorial Policy"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Contact Us"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Partner with us"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Privacy Policy"
+    },
+    {
+      "tag": "LI",
+      "cls": "r-shift",
+      "text": "Terms and Conditions"
+    }
+  ]
+}
