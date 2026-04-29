@@ -3,43 +3,56 @@ scraper/match_detail.py
 -----------------------
 Scrapes all four tabs for a single match:
   • Match Info  (/match-details)
-  • Squads      (/match-details — Playing XI section)
+  • Squads      (/match-details — Playing XI section, same page as info)
   • Live        (/ default — Summary/Commentary)
   • Scorecard   (/match-scorecard)
 
 API key schema (reverse-engineered from api.goscorer.com):
-  getSV3       — live match summary (single dict, minified single-letter keys)
+  getSV3       — live match summary (single dict, minified keys)
   getSC4       — scorecard (list of innings, minified keys)
-  getBallFeeds — ball-by-ball commentary (list, semi-readable keys)
+  getBallFeeds — ball-by-ball commentary
 
-getSV3 key reference:
-  ats  = current batting team score  e.g. "164/3"
-  j    = team 1 score                e.g. "305/8(50.0"
-  k    = team 2 score                e.g. "120/6(30.3"
-  fo   = format                      e.g. "ODI"
-  mn   = match number                e.g. "100"
-  mt   = match start epoch ms
-  q    = current run rate            e.g. "6.8"
+getSV3 confirmed key map (from live interception 2026-04-29):
+  fo   = format          e.g. "ODI"
+  mn   = match number    e.g. 100
+  mt   = start time epoch ms
+  B    = result text     e.g. "Rain Stops Play"
+  fsr  = status code     "P"=In Progress, "C"=Completed, "U"=Upcoming
+  ats  = current score   e.g. "205/4"
+  a    = current overs   e.g. 19.15
+  q    = run rate        e.g. "14.17*"
   t    = "target.rrr..."
-  p    = current batter keys         e.g. "7SA.4NY"
-  y    = batter1 stats               e.g. "XL.54.36.3"  key.runs.balls.fours
-  z    = batter2 stats               e.g. "7UK.9.5.0"
-  s    = strike rates                e.g. "37.41*"
-  x    = current bowler              e.g. "10Y.14.22.106.168.0.2" key.wkts.overs.runs
-  l/m/n= last 3 overs               e.g. "28:1.1.1.0.1.W"
-  rb   = recent balls list          each: {bf: bowler_key, d: runs, t: type}
-  fsr  = match status               "P"=in progress,"C"=complete,"U"=upcoming
+  j    = team1 score     e.g. "305/8(50.0"
+  k    = team2 score     e.g. "155/7(36.5"
+  y    = batter1        "key.runs.balls.fours"
+  z    = batter2        "key.runs.balls.fours"
+  s    = strike rates   "sr1.sr2"
+  x    = bowler         "key.wkts.overs.runs..."
+  l/m/n= last 3 overs  "over_no:ball.ball.ball..."
+  rb   = recent balls list
+  g    = team keys      "teamAkey.teamBkey"
+  sf   = series key
+  fid  = series/fixture ID
 
-getSC4 innings key reference:
-  a  = batting list  "playerKey.runs.balls.fours.sixes"
-  b  = bowling list  "playerKey.runs.balls_faced.4s.6s.score1.score2.wkts.b1.b2/sr-econ/"
-  c  = extras total
-  d  = total score   "305/8(300"  (overs as balls in parens)
-  e  = extras detail "wides.noballs.byes.legbyes.penalty"
-  p  = partnerships
-  st = innings number "1" / "2"
+getSC4 innings key map:
+  a  = batting list  ["playerKey.runs.balls.fours.sixes", ...]
+  b  = bowling list  ["playerKey.runs.balls.4s.6s.s1.s2.wkts.b1.b2/sr-econ/", ...]
+  d  = total score   "305/8(300"  (parens = balls bowled)
+  e  = extras        "wides.noballs.byes.legbyes.penalty"
+  st = innings number
 
-Player key→name map is built from getBallFeeds commentary (no dedicated endpoint).
+DOM selectors confirmed from debug_dom_dump (2026-04-29):
+  .venue-detail         — "Date\nVenue, City\nBroadcaster" (3 lines)
+  .series-name          — series name text
+  .toss-wrap            — toss description
+  .umpire-key           — umpire role labels
+  .umpire-val           — umpire name values
+  .match-name           — match number / description
+  .team-result .font3   — result / status text
+  .playingxi-teams      — playing XI container (on match-details page)
+  .player-card          — individual player card
+  .player-name          — player name within card
+  .all-team-txt         — team name heading inside playing XI section
 """
 
 from __future__ import annotations
@@ -109,8 +122,9 @@ async def _text(page: Page, selector: str, default: str = "") -> str:
 async def _texts(page: Page, selector: str) -> list[str]:
     try:
         els = await page.query_selector_all(selector)
-        return [(await el.inner_text()).strip() for el in els
-                if (await el.inner_text()).strip()]
+        return [
+            t for t in [(await el.inner_text()).strip() for el in els] if t
+        ]
     except Exception:
         return []
 
@@ -122,41 +136,32 @@ async def _texts(page: Page, selector: str) -> list[str]:
 def _build_key_map(ball_feeds: list[dict]) -> dict[str, str]:
     """
     Build {playerKey: playerName} from getBallFeeds entries.
-
-    Over summaries (type='o'): have full p1/p2/bowler names with pf1/pf2/bf keys.
-    Ball entries  (type='b'): c1 = "BowlerShort to BatterShort"; bf/pf are keys.
+    Over summaries (type='o') carry full names; ball entries (type='b')
+    carry short commentary strings like "Bowler to Batter".
     """
     key_map: dict[str, str] = {}
-
     for item in ball_feeds:
         t = item.get("type")
-
         if t == "o":
-            pairs = [
-                (item.get("pf1", "").strip(), item.get("p1", "").strip()),
-                (item.get("pf2", "").strip(), item.get("p2", "").strip()),
-                (item.get("bf",  "").strip(), item.get("bowler", "").strip()),
-            ]
-            for key, name in pairs:
-                if key and name:
-                    key_map[key] = name
-
+            for key_field, name_field in [("pf1", "p1"), ("pf2", "p2"), ("bf", "bowler")]:
+                k = str(item.get(key_field, "")).strip()
+                n = str(item.get(name_field, "")).strip()
+                if k and n:
+                    key_map[k] = n
         elif t == "b":
             c1 = item.get("c1", "")
-            bf = item.get("bf", "").strip()
-            pf = item.get("pf", "").strip()
+            bf = str(item.get("bf", "")).strip()
+            pf = str(item.get("pf", "")).strip()
             m = re.match(r"^(.+?)\s+to\s+(.+)$", c1)
             if m:
                 if bf:
                     key_map.setdefault(bf, m.group(1).strip())
                 if pf:
                     key_map.setdefault(pf, m.group(2).strip())
-
     return key_map
 
 
 def _resolve(key: str, key_map: dict[str, str]) -> str:
-    """Return player name for key, or the raw key if not found."""
     return key_map.get(key, key)
 
 
@@ -176,41 +181,22 @@ def _decode_score(raw: str) -> tuple[str, str]:
 
 _STATUS_MAP = {
     "P": "In Progress", "C": "Completed", "U": "Upcoming",
-    "S": "Stumps", "L": "Lunch", "T": "Tea", "I": "Innings Break",
-    "A": "Abandoned", "D": "Draw", "N": "No Result",
+    "S": "Stumps",      "L": "Lunch",     "T": "Tea",
+    "I": "Innings Break", "A": "Abandoned", "D": "Draw", "N": "No Result",
 }
 
 
-def _parse_sv3_info(sv3: dict, match_id: str) -> MatchInfo:
-    mt = sv3.get("mt")
-    start_dt = None
-    if mt:
-        try:
-            start_dt = datetime.datetime.utcfromtimestamp(mt / 1000).replace(
-                tzinfo=datetime.timezone.utc)
-        except Exception:
-            pass
-
-    return MatchInfo(
-        match_id=match_id,
-        series="",
-        match_number=str(sv3.get("mn") or ""),
-        venue=None,
-        city=None,
-        date="",
-        start_time_utc=start_dt,
-        toss=None,
-        umpires=[],
-        match_referee=None,
-        result=_STATUS_MAP.get(sv3.get("fsr", ""), None),
-        player_of_match=None,
-    )
+def _epoch_to_dt(ms: Any) -> Optional[datetime.datetime]:
+    try:
+        return datetime.datetime.utcfromtimestamp(
+            int(ms) / 1000).replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        return None
 
 
 def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveScore:
-    # Batters
-    y_parts = (sv3.get("y") or "").split(".")
-    z_parts = (sv3.get("z") or "").split(".")
+    y_parts  = (sv3.get("y") or "").split(".")
+    z_parts  = (sv3.get("z") or "").split(".")
     sr_parts = (sv3.get("s") or "").replace("*", "").split(".")
 
     batters: list[BattingEntry] = []
@@ -224,7 +210,6 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
                 strike_rate=_safe_float(_get(sr_parts, idx)),
             ))
 
-    # Bowler: key.wkts.overs.runs...
     x_parts = (sv3.get("x") or "").split(".")
     bowler: Optional[BowlingEntry] = None
     if x_parts and x_parts[0]:
@@ -235,22 +220,18 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
             runs=_safe_int(_get(x_parts, 3)),
         )
 
-    # Recent balls from rb list
     recent_balls: list[Ball] = []
     for inn_rb in (sv3.get("rb") or []):
         for ball in (inn_rb.get("b") or []):
             d = ball.get("d", 0)
             u = str(ball.get("u", ""))
             recent_balls.append(Ball(
-                over="",
-                runs=_safe_int(d) or 0,
+                over="", runs=_safe_int(d) or 0,
                 is_wicket=(u == "W"),
-                is_boundary=(d == 4),
-                is_six=(d == 6),
+                is_boundary=(d == 4), is_six=(d == 6),
                 commentary="",
             ))
 
-    # Last 3 overs text
     over_summaries = []
     for key in ["l", "m", "n"]:
         val = sv3.get(key, "")
@@ -258,18 +239,25 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
             parts = val.split(":", 1)
             over_summaries.append(f"Ov {parts[0]}: {parts[1] if len(parts) > 1 else ''}")
 
-    # RRR from t field "target.rrr..."
     t_parts = (sv3.get("t") or "").split(".")
     rrr = _safe_float(_get(t_parts, 1))
 
+    # Derive team names from j/k score strings via g key ("teamAkey.teamBkey")
+    g_parts = (sv3.get("g") or "").split(".")
+    team1_key = _get(g_parts, 0)
+    team2_key = _get(g_parts, 1)
+
     return LiveScore(
         match_id=match_id,
-        status_text=_STATUS_MAP.get(sv3.get("fsr", ""), sv3.get("fsr", "")),
-        batting_team="",
+        status_text=(
+            sv3.get("B") or  # e.g. "Rain Stops Play"
+            _STATUS_MAP.get(sv3.get("fsr", ""), sv3.get("fsr", ""))
+        ),
+        batting_team=_resolve(team1_key, key_map) if sv3.get("h") == 1 else _resolve(team2_key, key_map),
         bowling_team="",
         current_score=sv3.get("ats") or "",
         current_overs=str(sv3.get("a") or ""),
-        run_rate=_safe_float(sv3.get("q")),
+        run_rate=_safe_float((sv3.get("q") or "").rstrip("*")),
         required_run_rate=rrr,
         last_5_overs=" | ".join(over_summaries),
         current_partnership="",
@@ -284,7 +272,6 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_batting_str(raw: str, key_map: dict[str, str]) -> Optional[BattingEntry]:
-    """'YT.61.42.0.0' → BattingEntry(player, runs, balls, fours, sixes)"""
     parts = raw.split(".")
     if not parts or not parts[0]:
         return None
@@ -300,33 +287,23 @@ def _parse_batting_str(raw: str, key_map: dict[str, str]) -> Optional[BattingEnt
 
 def _parse_bowling_str(raw: str, key_map: dict[str, str]) -> Optional[BowlingEntry]:
     """
-    Format: 'playerKey.runs.balls.4s.6s.score1.score2.wkts.b1.b2/sr-econ/'
-    Shorter entries like 'playerKey/sr-econ' or 'playerKey' are handled gracefully.
+    Format: 'playerKey.runs.balls.4s.6s.s1.s2.wkts.b1.b2/sr-econ/'
+    All fields after playerKey are optional — handled via _get().
     """
     if not raw or not raw.strip():
         return None
-
-    # Extract /sr-econ/ suffix if present
     sr, econ = None, None
     slash_m = re.search(r"/([0-9.]+)-([0-9.]+)/", raw)
     if slash_m:
-        sr   = _safe_float(slash_m.group(1))
         econ = _safe_float(slash_m.group(2))
-
-    # Main part before first slash
     main = raw.split("/")[0].strip()
     parts = main.split(".")
     if not parts or not parts[0]:
         return None
-
-    player_key = parts[0]
-
-    # balls faced → convert to overs (6 balls = 1 over)
     balls_raw = _safe_int(_get(parts, 2))
     overs = round(balls_raw / 6, 1) if balls_raw is not None else None
-
     return BowlingEntry(
-        player=_resolve(player_key, key_map),
+        player=_resolve(parts[0], key_map),
         runs=_safe_int(_get(parts, 1)),
         overs=overs,
         wickets=_safe_int(_get(parts, 7)),
@@ -335,55 +312,37 @@ def _parse_bowling_str(raw: str, key_map: dict[str, str]) -> Optional[BowlingEnt
 
 
 def _parse_extras_str(raw: str) -> Extras:
-    """'0.1.5.0.0' → Extras(wides, no_balls, byes, leg_byes, penalty)"""
     parts = (raw or "0.0.0.0.0").split(".")
     vals = [_safe_int(_get(parts, i)) or 0 for i in range(5)]
     return Extras(
         wides=vals[0], no_balls=vals[1], byes=vals[2],
-        leg_byes=vals[3], penalty=vals[4],
-        total=sum(vals),
+        leg_byes=vals[3], penalty=vals[4], total=sum(vals),
     )
 
 
 def _parse_sc4_innings(raw: dict, inn_num: int, key_map: dict[str, str]) -> Innings:
-    batting = [
-        e for e in (_parse_batting_str(s, key_map) for s in (raw.get("a") or []))
-        if e is not None
-    ]
-    bowling = [
-        e for e in (_parse_bowling_str(s, key_map) for s in (raw.get("b") or []))
-        if e is not None
-    ]
-
+    batting = [e for e in (_parse_batting_str(s, key_map) for s in (raw.get("a") or [])) if e]
+    bowling = [e for e in (_parse_bowling_str(s, key_map) for s in (raw.get("b") or [])) if e]
     total_runs, total_overs = _decode_score(raw.get("d") or "")
-
-    # Convert overs from balls: "305/8(300" → 300 balls = 50.0 overs
     overs_balls = _safe_int(total_overs)
     if overs_balls and overs_balls > 100:
         total_overs = str(round(overs_balls / 6, 1))
-
-    extras = _parse_extras_str(raw.get("e") or "")
-
     return Innings(
         innings_number=_safe_int(raw.get("st")) or inn_num,
-        batting_team="",
-        bowling_team="",
-        total=total_runs,
-        overs=total_overs,
-        extras=extras,
-        batting=batting,
-        bowling=bowling,
-        is_super_over=False,
+        batting_team="", bowling_team="",
+        total=total_runs, overs=total_overs,
+        extras=_parse_extras_str(raw.get("e") or ""),
+        batting=batting, bowling=bowling, is_super_over=False,
     )
 
 
 def _parse_sc4(sc4: list, key_map: dict[str, str], match_id: str) -> Scorecard:
-    innings_list = [
-        _parse_sc4_innings(inn, i + 1, key_map)
-        for i, inn in enumerate(sc4)
-        if isinstance(inn, dict)
-    ]
-    return Scorecard(match_id=match_id, innings=innings_list, is_partial=False)
+    return Scorecard(
+        match_id=match_id,
+        innings=[_parse_sc4_innings(inn, i + 1, key_map)
+                 for i, inn in enumerate(sc4) if isinstance(inn, dict)],
+        is_partial=False,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -401,17 +360,13 @@ def _parse_ball_feeds(feeds: list, match_id: str) -> list[Ball]:
                 over=str(item.get("o") or ""),
                 runs=runs,
                 is_wicket=(str(runs_raw) == "W"),
-                is_boundary=(runs == 4),
-                is_six=(runs == 6),
+                is_boundary=(runs == 4), is_six=(runs == 6),
                 commentary=str(item.get("c1") or ""),
             ))
         elif t == "o":
             balls.append(Ball(
                 over=str(item.get("o") or ""),
                 runs=_safe_int(item.get("runs")) or 0,
-                is_wicket=False,
-                is_boundary=False,
-                is_six=False,
                 commentary=(
                     f"End of over {item.get('o')}: "
                     f"{item.get('team', '')} {item.get('s', '')} — "
@@ -422,49 +377,131 @@ def _parse_ball_feeds(feeds: list, match_id: str) -> list[Ball]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DOM fallbacks
+# DOM scrapers  (confirmed selectors from debug_dom_dump 2026-04-29)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _parse_info_dom(page: Page, match_id: str) -> MatchInfo:
-    log.debug("[{}] DOM fallback for Match Info", match_id)
+async def _parse_info_dom(page: Page, match_id: str, sv3: Optional[dict] = None) -> MatchInfo:
+    """
+    Parse match info from the rendered match-details DOM.
 
-    async def row(label: str) -> str:
-        rows = await page.query_selector_all("[class*='info-row'], [class*='detail-row'], tr")
-        for r in rows:
-            if label.lower() in (await r.inner_text()).lower():
-                cells = await r.query_selector_all("td, [class*='value']")
-                if len(cells) >= 2:
-                    return (await cells[-1].inner_text()).strip()
-        return ""
+    .venue-detail  → "Date\nVenue, City\nBroadcaster"  (3 newline-separated lines)
+    .series-name   → series name
+    .toss-wrap     → toss description
+    .umpire-val    → umpire names (multiple elements)
+    .match-name    → match number / description
+    .team-result .font3  → result text
+    """
+    log.debug("[{}] DOM scrape for Match Info", match_id)
+
+    # --- venue-detail: "Date\nVenue, City\nBroadcaster" ---
+    venue_raw = await _text(page, ".venue-detail")
+    lines = [l.strip() for l in venue_raw.split("\n") if l.strip()]
+    date_str   = lines[0] if len(lines) > 0 else ""
+    venue_city = lines[1] if len(lines) > 1 else ""
+    # Split "Tribhuvan University International Cricket Ground, Kirtipur"
+    venue_name, city = (venue_city.rsplit(",", 1) if "," in venue_city
+                        else (venue_city, ""))
+    venue_name = venue_name.strip()
+    city       = city.strip()
+
+    # --- series ---
+    series = await _text(page, ".series-name")
+
+    # --- match number: prefer sv3 mn, fallback to .match-name DOM ---
+    match_number = ""
+    if sv3:
+        match_number = str(sv3.get("mn") or "")
+    if not match_number:
+        match_number = await _text(page, ".match-name, .format-match-exp")
+
+    # --- toss ---
+    toss = await _text(page, ".toss-wrap")
+
+    # --- umpires: .umpire-val elements ---
+    umpires = await _texts(page, ".umpire-val")
+
+    # --- result: prefer sv3 B key, fallback to DOM ---
+    result = ""
+    if sv3:
+        result = sv3.get("B") or _STATUS_MAP.get(sv3.get("fsr", ""), "")
+    if not result:
+        result = await _text(page, ".team-result .font3")
+
+    # --- start time: from sv3 mt epoch ms ---
+    start_dt = _epoch_to_dt(sv3.get("mt")) if sv3 else None
+    if not start_dt and date_str:
+        start_dt = parse_crex_datetime(date_str)
 
     return MatchInfo(
         match_id=match_id,
-        series=await _text(page, "[class*='series-name'], [class*='tournament']"),
-        venue=await row("venue") or None,
-        toss=await row("toss") or None,
-        umpires=await _texts(page, "[class*='umpire']"),
-        result=await row("result") or None,
+        series=series or "",
+        match_number=match_number or "",
+        venue=venue_name or None,
+        city=city or None,
+        date=date_str,
+        start_time_utc=start_dt,
+        toss=toss or None,
+        umpires=umpires,
+        match_referee=None,
+        result=result or None,
+        player_of_match=None,
     )
 
 
 async def _parse_squads_dom(page: Page, match_id: str) -> Squads:
-    log.debug("[{}] DOM fallback for Squads", match_id)
+    """
+    Scrape Playing XI from the match-details page.
+    CREX renders squads inside .playingxi-teams on the same page as match info.
+
+    Structure confirmed from debug_dom_dump:
+      .playingxi-teams          — outer container
+        .all-team-txt           — team name heading (one per team block)
+        .player-card            — individual player card
+          .player-name          — player's name text
+    """
+    log.debug("[{}] DOM scrape for Squads", match_id)
     teams: list[TeamSquad] = []
-    sections = await page.query_selector_all(
-        "[class*='team-squad'], [class*='playing-xi'], [class*='squad-list'], [class*='team-players']"
-    )
-    for section in sections:
-        name_el = await section.query_selector("[class*='team-name'], h3, h4")
-        team_name = (await name_el.inner_text()).strip() if name_el else "Unknown"
-        player_els = await section.query_selector_all(
-            "[class*='player-name'], [class*='player-item'] span"
+
+    # Each team's playing XI is in a separate .playingxi-teams block
+    pxi_sections = await page.query_selector_all(".playingxi-teams")
+
+    if not pxi_sections:
+        # Fallback: try to find any team-named section with player cards
+        log.debug("[{}] .playingxi-teams not found, trying fallback selectors", match_id)
+        pxi_sections = await page.query_selector_all(
+            "[class*='playing-xi'], [class*='squad'], [class*='playing11']"
         )
-        players = [
-            Player(name=(await el.inner_text()).strip())
-            for el in player_els
-            if (await el.inner_text()).strip()
-        ]
-        teams.append(TeamSquad(team_name=team_name, players=players))
+
+    for section in pxi_sections:
+        # Team name
+        team_el = await section.query_selector(".all-team-txt, .team-name, h3, h4")
+        team_name = (await team_el.inner_text()).strip() if team_el else "Unknown"
+
+        # Player cards
+        player_els = await section.query_selector_all(".player-card")
+        players: list[Player] = []
+        for card in player_els:
+            name_el = await card.query_selector(".player-name")
+            if not name_el:
+                # fallback: first span/div with non-empty text
+                name_el = await card.query_selector("span, div")
+            if name_el:
+                name = (await name_el.inner_text()).strip()
+                if name:
+                    # Detect captain/keeper from icon classes or text
+                    card_html = await card.inner_html()
+                    is_captain = "captain" in card_html.lower() or "(c)" in name.lower()
+                    is_keeper  = "keeper" in card_html.lower()  or "(wk)" in name.lower()
+                    clean_name = re.sub(r"\s*\(c\)|\s*\(wk\)", "", name, flags=re.I).strip()
+                    players.append(Player(
+                        name=clean_name,
+                        is_captain=is_captain,
+                        is_keeper=is_keeper,
+                    ))
+
+        if team_name or players:
+            teams.append(TeamSquad(team_name=team_name, players=players))
+
     return Squads(match_id=match_id, teams=teams, announced=bool(teams))
 
 
@@ -475,7 +512,7 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
         "[class*='team-inning'], [class*='scorecard-table'], [class*='innings-container']"
     )
     for idx, section in enumerate(sections, start=1):
-        bt_el = await section.query_selector("[class*='team-name'], [class*='batting-team']")
+        bt_el = await section.query_selector(".team-name, [class*='batting-team']")
         batting_team = (await bt_el.inner_text()).strip() if bt_el else ""
         batting_rows = await section.query_selector_all(
             "[class*='player-data'], [class*='batting-row'], tbody tr"
@@ -503,9 +540,9 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
 
 async def _parse_live_dom(page: Page, match_id: str) -> LiveScore:
     log.debug("[{}] DOM fallback for Live", match_id)
-    status = await _text(page, "[class*='live-score-header'], [class*='match-status']")
-    score  = await _text(page, "[class*='live-score-card'], [class*='team-score']")
-    overs  = await _text(page, "[class*='over-data'], [class*='overs']")
+    status = await _text(page, ".team-result .font3, [class*='match-status']")
+    score  = await _text(page, ".team-score, [class*='live-score']")
+    overs  = await _text(page, ".team-over, [class*='overs']")
     els = await page.query_selector_all(
         "[class*='cm-b-ballupdate'], [class*='commentary-item'], [class*='ball-item']"
     )
@@ -528,31 +565,29 @@ async def _parse_live_dom(page: Page, match_id: str) -> LiveScore:
 async def scrape_match_info(match_id: str, slug: str) -> MatchInfo:
     url = f"{config.MATCH_DETAIL_BASE}/{slug}/match-details"
     log.info("[{}] Scraping Match Info → {}", match_id, url)
-
     async with pool.page() as page:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
         await _navigate(page, url)
         await asyncio.sleep(random.uniform(config.MIN_REQUEST_DELAY, config.MAX_REQUEST_DELAY))
-
-        sv3 = interceptor.find("getSV3")
-        if sv3 and isinstance(sv3, dict) and sv3.get("mn"):
-            return _parse_sv3_info(sv3, match_id)
-
-        return await _parse_info_dom(page, match_id)
+        sv3 = interceptor.find("getSV3")  # provides mn, mt, B, fsr
+        # Always use DOM for venue/series/toss/umpires; sv3 enriches start_time + result
+        return await _parse_info_dom(page, match_id, sv3=sv3)
 
 
 @retry(max_attempts=config.MAX_RETRIES, base_delay=config.RETRY_BASE_DELAY)
 async def scrape_squads(match_id: str, slug: str) -> Squads:
+    """
+    Squads are scraped from match-details page (.playingxi-teams).
+    The /match-squads URL renders a blank page (no API, no DOM content).
+    """
     url = f"{config.MATCH_DETAIL_BASE}/{slug}/match-details"
     log.info("[{}] Scraping Squads → {}", match_id, url)
-
     async with pool.page() as page:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
         await _navigate(page, url)
         await asyncio.sleep(random.uniform(config.MIN_REQUEST_DELAY, config.MAX_REQUEST_DELAY))
-        # Squads are only in DOM (no squad list in getSV3)
         return await _parse_squads_dom(page, match_id)
 
 
@@ -560,21 +595,17 @@ async def scrape_squads(match_id: str, slug: str) -> Squads:
 async def scrape_scorecard(match_id: str, slug: str) -> Scorecard:
     url = f"{config.MATCH_DETAIL_BASE}/{slug}/match-scorecard"
     log.info("[{}] Scraping Scorecard → {}", match_id, url)
-
     async with pool.page() as page:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
         await _navigate(page, url)
         await asyncio.sleep(random.uniform(config.MIN_REQUEST_DELAY, config.MAX_REQUEST_DELAY))
-
-        sc4   = interceptor.find("getSC4")
-        feeds = interceptor.find("getBallFeeds") or []
+        sc4     = interceptor.find("getSC4")
+        feeds   = interceptor.find("getBallFeeds") or []
         key_map = _build_key_map(feeds) if isinstance(feeds, list) else {}
-
         if sc4 and isinstance(sc4, list) and sc4:
             log.info("[{}] Scorecard from getSC4: {} innings", match_id, len(sc4))
             return _parse_sc4(sc4, key_map, match_id)
-
         return await _parse_scorecard_dom(page, match_id)
 
 
@@ -582,17 +613,14 @@ async def scrape_scorecard(match_id: str, slug: str) -> Scorecard:
 async def scrape_live(match_id: str, slug: str) -> LiveScore:
     url = f"{config.MATCH_DETAIL_BASE}/{slug}"
     log.info("[{}] Scraping Live score → {}", match_id, url)
-
     async with pool.page() as page:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
         await _navigate(page, url)
         await asyncio.sleep(random.uniform(2.5, 4.0))
-
-        sv3   = interceptor.find("getSV3")
-        feeds = interceptor.find("getBallFeeds") or []
+        sv3     = interceptor.find("getSV3")
+        feeds   = interceptor.find("getBallFeeds") or []
         key_map = _build_key_map(feeds) if isinstance(feeds, list) else {}
-
         if sv3 and isinstance(sv3, dict):
             live = _parse_sv3_live(sv3, key_map, match_id)
             if isinstance(feeds, list) and feeds:
@@ -601,14 +629,15 @@ async def scrape_live(match_id: str, slug: str) -> LiveScore:
                 log.info("[{}] Live from getSV3: score={} rr={}",
                          match_id, live.current_score, live.run_rate)
                 return live
-
         return await _parse_live_dom(page, match_id)
 
 
 async def scrape_all_static(match_id: str, slug: str) -> dict:
-    """Scrape Match Info and Squads concurrently (called on first discovery)."""
-    info_task   = asyncio.create_task(scrape_match_info(match_id, slug))
-    squads_task = asyncio.create_task(scrape_squads(match_id, slug))
+    """Scrape Match Info and Squads concurrently on first match discovery."""
+    info_task, squads_task = (
+        asyncio.create_task(scrape_match_info(match_id, slug)),
+        asyncio.create_task(scrape_squads(match_id, slug)),
+    )
     info, squads = await asyncio.gather(info_task, squads_task, return_exceptions=True)
     return {
         "match_info": info   if not isinstance(info,   Exception) else None,
