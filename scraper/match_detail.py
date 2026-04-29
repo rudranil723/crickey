@@ -368,8 +368,9 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
     innings_list: list[Innings] = []
     innings_number = 0
 
+    # CREX uses .team-inning for each innings section
     inning_sections = await page.query_selector_all(
-        "[class*='innings-container'], [class*='innings-wrapper'], [class*='inning-section']"
+        "[class*='team-inning'], [class*='scorecard-table'], [class*='innings-container']"
     )
 
     for section in inning_sections:
@@ -378,14 +379,20 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
         batting_team = (await batting_team_el.inner_text()).strip() if batting_team_el else ""
 
         # ── Batting rows ──────────────────────────────────────────────────────
+        # Look for rows containing player data
         batting_rows = await section.query_selector_all(
-            "[class*='batting-row'], [class*='batsman-row'], tbody tr"
+            "[class*='player-data'], [class*='batting-row'], [class*='batsman-row'], tbody tr"
         )
         batting: list[BattingEntry] = []
         for row in batting_rows:
             cells = await row.query_selector_all("td")
+            if not cells:
+                # Some designs use divs for cells
+                cells = await row.query_selector_all("[class*='cell'], [class*='col']")
+            
             texts = [(await c.inner_text()).strip() for c in cells]
-            if len(texts) >= 5 and texts[0]:  # filter header/total rows
+            # CREX scorecard: Player, Dismissal, R, B, 4s, 6s, SR
+            if len(texts) >= 5 and texts[0]:
                 batting.append(BattingEntry(
                     player=texts[0],
                     dismissal=texts[1] if len(texts) > 1 else None,
@@ -397,10 +404,15 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
                 ))
 
         # ── Bowling rows ──────────────────────────────────────────────────────
-        bowling_rows = await section.query_selector_all("[class*='bowling-row'], [class*='bowler-row']")
+        bowling_rows = await section.query_selector_all(
+            "[class*='bowler-table'] tr, [class*='bowling-row'], [class*='bowler-row']"
+        )
         bowling: list[BowlingEntry] = []
         for row in bowling_rows:
             cells = await row.query_selector_all("td")
+            if not cells:
+                cells = await row.query_selector_all("[class*='cell'], [class*='col']")
+                
             texts = [(await c.inner_text()).strip() for c in cells]
             if len(texts) >= 4 and texts[0]:
                 bowling.append(BowlingEntry(
@@ -412,13 +424,14 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
                     economy=_safe_float(texts[5]) if len(texts) > 5 else None,
                 ))
 
-        innings_list.append(Innings(
-            innings_number=innings_number,
-            batting_team=batting_team,
-            bowling_team="",
-            batting=batting,
-            bowling=bowling,
-        ))
+        if batting or bowling:
+            innings_list.append(Innings(
+                innings_number=innings_number,
+                batting_team=batting_team,
+                bowling_team="",
+                batting=batting,
+                bowling=bowling,
+            ))
 
     return Scorecard(match_id=match_id, innings=innings_list, is_partial=True)
 
@@ -484,11 +497,13 @@ def _parse_live_api(data: Any, match_id: str) -> Optional[LiveScore]:
 
 async def _parse_live_dom(page: Page, match_id: str) -> LiveScore:
     log.debug("[{}] DOM fallback for Live", match_id)
-    status   = await _text(page, "[class*='match-status'], [class*='status-text']")
-    score    = await _text(page, "[class*='score'], [class*='current-score']")
-    overs    = await _text(page, "[class*='overs'], [class*='over-count']")
+    status   = await _text(page, "[class*='live-score-header'], [class*='match-status']")
+    score    = await _text(page, "[class*='live-score-card'], [class*='team-score']")
+    overs    = await _text(page, "[class*='over-data'], [class*='overs']")
 
-    commentary_els = await page.query_selector_all("[class*='commentary-item'], [class*='ball-item']")
+    commentary_els = await page.query_selector_all(
+        "[class*='cm-b-ballupdate'], [class*='commentary-item'], [class*='ball-item']"
+    )
     balls: list[Ball] = []
     for el in commentary_els[:20]:
         text = (await el.inner_text()).strip()
@@ -557,8 +572,29 @@ async def scrape_scorecard(match_id: str, slug: str) -> Scorecard:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
         await _navigate(page, url)
+        
+        # Wait for scorecard content
+        try:
+            await page.wait_for_selector(
+                "[class*='scorecard'], [class*='team-inning'], [class*='score-wrapper'], table",
+                timeout=8000
+            )
+        except PlaywrightTimeout:
+            log.warning("[{}] Scorecard selector wait timed out — trying DOM anyway", match_id)
+        
         await asyncio.sleep(random.uniform(config.MIN_REQUEST_DELAY, config.MAX_REQUEST_DELAY))
 
+        # Filter intercepted calls by URL keyword
+        SC_KEYWORDS = ("getSC", "getScorecard", "scorecard", "innings", "batting")
+        for captured in interceptor.captured:
+            cap_url = captured.get("url", "").lower()
+            if any(kw.lower() in cap_url for kw in SC_KEYWORDS):
+                result = _parse_scorecard_api(captured["data"], match_id)
+                if result and result.innings:
+                    log.info("[{}] Scorecard from API: {} innings", match_id, len(result.innings))
+                    return result
+
+        # Last resort: try any captured response
         for captured in interceptor.captured:
             result = _parse_scorecard_api(captured["data"], match_id)
             if result and result.innings:
@@ -569,19 +605,45 @@ async def scrape_scorecard(match_id: str, slug: str) -> Scorecard:
 
 @retry(max_attempts=config.MAX_RETRIES, base_delay=config.RETRY_BASE_DELAY)
 async def scrape_live(match_id: str, slug: str) -> LiveScore:
-    url = f"{config.MATCH_DETAIL_BASE}/{slug}"
-    log.info("[{}] Scraping Live → {}", match_id, url)
+    # Try multiple URL patterns for live data
+    urls_to_try = [
+        f"{config.MATCH_DETAIL_BASE}/{slug}",           # root
+        f"{config.MATCH_DETAIL_BASE}/{slug}/live-score", # explicit live tab
+    ]
+    log.info("[{}] Scraping Live score", match_id)
 
     async with pool.page() as page:
         interceptor = APIInterceptor(page)
         await interceptor.attach()
-        await _navigate(page, url)
-        await asyncio.sleep(random.uniform(config.MIN_REQUEST_DELAY, config.MAX_REQUEST_DELAY))
 
-        for captured in interceptor.captured:
-            result = _parse_live_api(captured["data"], match_id)
-            if result and result.current_score:
-                return result
+        for url in urls_to_try:
+            await _navigate(page, url)
+            try:
+                await page.wait_for_selector(
+                    "[class*='live'], [class*='score'], [class*='commentary'], [class*='ball']",
+                    timeout=6000
+                )
+            except PlaywrightTimeout:
+                pass
+            
+            # Live content often takes a moment to populate even after idle
+            await asyncio.sleep(random.uniform(2.0, 3.5))
+
+            # Filter by live-related URL keywords
+            LIVE_KEYWORDS = ("getLive", "liveScore", "getLS", "commentary", "livematch", "getSV")
+            for captured in interceptor.captured:
+                cap_url = captured.get("url", "").lower()
+                if any(kw.lower() in cap_url for kw in LIVE_KEYWORDS):
+                    result = _parse_live_api(captured["data"], match_id)
+                    if result and result.current_score:
+                        log.info("[{}] Live score from API: {}", match_id, result.current_score)
+                        return result
+
+            # Try unfiltered
+            for captured in interceptor.captured:
+                result = _parse_live_api(captured["data"], match_id)
+                if result and result.current_score:
+                    return result
 
         return await _parse_live_dom(page, match_id)
 

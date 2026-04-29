@@ -35,6 +35,28 @@ from utils.time_utils import parse_crex_datetime, utc_now
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# Matches strings that are purely score-like: digits, slashes, parens, dots, spaces, colons, semicolons
+_SCORE_RE = re.compile(r'[\d/\(\)\.\s;:C]+$')
+# A score must have mostly numbers/symbols. We allow 'W', 'C', 'D' but not all of A-Z
+_SCORE_ONLY_RE = re.compile(r'^[\d\s/\(\)\.\-:;WCD]+$', re.IGNORECASE)
+
+
+def _clean_team_name(raw: str | None) -> str | None:
+    """Strip score artifacts from team names; return None if value looks like a score."""
+    if not raw:
+        return None
+    # If the text has multiple lines, the first line is always the team name
+    cleaned = raw.strip().split('\n')[0].strip()
+    if not cleaned:
+        return None
+    # If the entire string looks like a score/number, discard it
+    if _SCORE_ONLY_RE.fullmatch(cleaned):
+        return None
+    # Strip trailing score-like suffixes (e.g. "India 245/6")
+    cleaned = _SCORE_RE.sub('', cleaned).strip()
+    return cleaned or None
+
+
 def _extract_match_id(url: str) -> str:
     """Pull the last path segment as match id, e.g. 'ind-vs-aus-abc123' → 'abc123'."""
     parts = [p for p in url.rstrip("/").split("/") if p]
@@ -206,15 +228,15 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
             slug = full_url.split("/cricket-live-score/")[-1].split("/")[0]
             match_id = _extract_match_id(slug)
 
-            # Team names
+            # Team names — use specific selectors to avoid picking up score elements
             team_els = await card.query_selector_all(
-                "[class*='team-name'], [class*='teamName'], [class*='team'] span"
+                "[class*='team-name'], [class*='teamName']"
             )
             teams = [await el.inner_text() for el in team_els]
             teams = [t.strip() for t in teams if t.strip()]
 
-            team_a = teams[0] if len(teams) > 0 else "TBD"
-            team_b = teams[1] if len(teams) > 1 else "TBD"
+            team_a = _clean_team_name(teams[0]) or "TBD" if len(teams) > 0 else "TBD"
+            team_b = _clean_team_name(teams[1]) or "TBD" if len(teams) > 1 else "TBD"
 
             # Status text
             status_el = await card.query_selector(
