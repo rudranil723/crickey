@@ -68,9 +68,9 @@ A plain `requests` scraper returns an empty HTML shell.
 
 Our **hybrid strategy**:
 1. Use Playwright (headless Chromium) to trigger page navigation and JavaScript execution.
-2. Attach a network interceptor **before** navigation — capture raw JSON from CREX’s internal REST API (`api.goscorer.com`).
+2. Attach a network interceptor **before** navigation — capture raw JSON from CREX's internal REST API (`api.goscorer.com`).
 3. Parse the structured JSON directly (fast, no HTML fragility).
-4. Fall back to DOM parsing if the API response isn’t captured.
+4. Fall back to DOM parsing if the API response isn't captured.
 
 This gives us **API speed** with **browser resilience**.
 
@@ -115,6 +115,8 @@ output/
 
 ### Sample `match_info.json`
 
+> Full sample: [`sample_output/match_info_sample.json`](sample_output/match_info_sample.json)
+
 ```json
 {
   "match_id": "nep-vs-oma-100th-match-mens-cwc-league-2-2023-27-match-updates-11HD",
@@ -132,6 +134,8 @@ output/
 
 ### Sample `scorecard_latest.json`
 
+> Full sample: [`sample_output/scorecard_sample.json`](sample_output/scorecard_sample.json)
+
 ```json
 {
   "match_id": "nep-vs-oma-...",
@@ -139,22 +143,48 @@ output/
   "innings": [
     {
       "innings_number": 1,
-      "batting_team": "",
+      "batting_team": "Oman",
       "total": "305/8",
       "overs": "50.0",
       "batting": [
-        {
-          "player": "Aqib Ilyas",
-          "runs": 83, "balls": 92,
-          "fours": 7, "sixes": 2
-        }
+        { "player": "Aqib Ilyas", "runs": 83, "balls": 92, "fours": 7, "sixes": 2 }
       ],
-      "bowling": [...],
-      "extras": {"wides": 4, "no_balls": 1, "byes": 2, "total": 7}
+      "bowling": [
+        { "player": "Sagar Pun", "wickets": 3, "overs": 10.0, "runs": 52, "economy": 5.2 }
+      ],
+      "extras": { "wides": 6, "no_balls": 2, "byes": 3, "leg_byes": 1, "total": 12 }
     }
   ]
 }
 ```
+
+### Sample `live_latest.json`
+
+> Full sample: [`sample_output/live_sample.json`](sample_output/live_sample.json)
+
+```json
+{
+  "match_id": "nep-vs-oma-...",
+  "status_text": "In Progress",
+  "current_score": "205/4",
+  "current_overs": "38.3",
+  "run_rate": 5.33,
+  "required_run_rate": 7.81,
+  "interruption_reason": null,
+  "batters_on_crease": [
+    { "player": "Rohit Paudel",   "runs": 55, "balls": 60, "strike_rate": 91.7 },
+    { "player": "Dipendra Airee", "runs": 18, "balls": 22, "strike_rate": 81.8 }
+  ],
+  "current_bowler": { "player": "Bilal Khan", "wickets": 2, "overs": 7.3, "runs": 31 },
+  "recent_balls": [
+    { "over": "38.3", "runs": 4, "is_boundary": true, "commentary": "FOUR! drives through covers" }
+  ]
+}
+```
+
+### Sample `squads.json`
+
+> Full sample: [`sample_output/squads_sample.json`](sample_output/squads_sample.json)
 
 ---
 
@@ -176,6 +206,14 @@ venv\Scripts\activate      # Windows
 
 pip install -r requirements.txt
 playwright install chromium
+```
+
+### Environment Variables
+
+Copy `.env.example` to `.env` and adjust values if needed:
+
+```bash
+cp .env.example .env
 ```
 
 ---
@@ -208,9 +246,27 @@ python main.py --match "ind-vs-aus-1st-odi-abc123" --tabs scorecard live
 
 ---
 
+## Running Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Or run the output validator manually after a scrape:
+
+```bash
+# Check schedule only
+python -m pytest tests/test_output.py -v
+
+# Check a specific match's output
+python tests/test_output.py <match-slug>
+```
+
+---
+
 ## Configuration
 
-All tuneable constants are in `config.py`:
+All tuneable constants are in `config.py` (see `.env.example` for environment overrides):
 
 | Constant | Default | Description |
 |---|---|---|
@@ -236,6 +292,7 @@ All tuneable constants are in `config.py`:
 | **Semaphore(3 pages)** | Caps memory/CPU while allowing concurrency |
 | **Per-match timestamped files** | Full audit trail; `latest.json` for quick access |
 | **Squads from /match-details DOM** | `/match-squads` URL renders a blank page on CREX |
+| **Crash recovery state file** | `output/.scheduler_state.json` persists job registry across restarts |
 
 > Full design rationale and future optimisation plan: **[DESIGN.md](DESIGN.md)**
 
@@ -248,13 +305,15 @@ All tuneable constants are in `config.py`:
 - ✅ **Test matches** — multiple innings (innings array)
 - ✅ **Super Over** — detected as separate innings (`is_super_over: true`)
 - ✅ **DLS applied** — `dls_target` field captured
+- ✅ **Rain / DLS / Delay** — `interruption_reason` field set on `LiveScore`
 - ✅ **Abandoned / No Result** — status mapped, final scrape still runs
 - ✅ **All times in UTC** — epoch ms from `getSV3["mt"]` converted to ISO 8601
-- ✅ **Status text from API** — `getSV3["B"]` carries human-readable text (e.g. “Rain Stops Play”)
+- ✅ **Status text from API** — `getSV3["B"]` carries human-readable text (e.g. "Rain Stops Play")
 - ✅ **Page load timeout** — retried with exponential back-off
 - ✅ **API response unavailable** — automatic DOM fallback
 - ✅ **Runaway pollers** — jobs cancelled immediately on match completion
 - ✅ **Process killed mid-write** — atomic writes prevent corruption
+- ✅ **Scheduler crash recovery** — `output/.scheduler_state.json` restored on restart
 
 ---
 
@@ -266,6 +325,7 @@ crickey/
 ├── scheduler.py         # Job lifecycle orchestrator
 ├── config.py            # All constants
 ├── requirements.txt
+├── .env.example         # Environment variable template
 ├── DESIGN.md            # Architecture decisions & follow-up Q&A
 ├── scraper/
 │   ├── browser.py       # Playwright browser pool
@@ -280,5 +340,8 @@ crickey/
 │   ├── logger.py        # Loguru structured logging
 │   ├── retry.py         # Exponential back-off decorator
 │   └── time_utils.py    # Timezone-aware date parsers
-└── output/              # Auto-created scraped data
+├── tests/
+│   ├── __init__.py
+│   └── test_output.py   # Output quality validator
+└── output/              # Auto-created scraped data (git-ignored)
 ```
