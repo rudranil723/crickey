@@ -29,7 +29,10 @@ Job Lifecycle
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from datetime import timezone
+from pathlib import Path
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -46,6 +49,9 @@ from storage import (
 )
 from utils.logger import log
 from utils.time_utils import utc_now
+
+# Path to scheduler persistence file (Task 5)
+_STATE_FILE = Path(config.OUTPUT_DIR) / ".scheduler_state.json"
 
 
 class MatchJobRegistry:
@@ -83,6 +89,20 @@ class MatchJobRegistry:
 
     def mark_known(self, match_id: str) -> None:
         self._known.add(match_id)
+
+    def to_dict(self) -> dict:
+        """Serialise registry state to a plain dict for persistence."""
+        return {
+            "known":        list(self._known),
+            "static_done":  list(self._static_done),
+            "completed":    list(self._completed),
+        }
+
+    def restore_from_dict(self, data: dict) -> None:
+        """Restore registry state from a persisted dict (on crash recovery)."""
+        self._known        = set(data.get("known", []))
+        self._static_done  = set(data.get("static_done", []))
+        self._completed    = set(data.get("completed", []))
 
 
 # ── Module-level singletons ───────────────────────────────────────────────────
@@ -266,13 +286,49 @@ async def _poll_match_list() -> None:
         elif match.status == "completed" and not _registry.is_completed(mid):
             _handle_match_end(mid, match.match_slug)
 
+    # Task 5: Persist registry state after every poll for crash recovery.
+    _persist_state()
+
     log.info("=== Match list poll complete — {} matches tracked ===", len(matches))
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _persist_state() -> None:
+    """Task 5: Synchronously persist registry state to disk for crash recovery."""
+    try:
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(_registry.to_dict(), fh, indent=2)
+        log.debug("Scheduler state persisted to {}", _STATE_FILE)
+    except Exception as exc:
+        log.warning("Failed to persist scheduler state: {}", exc)
+
+
+def _restore_state() -> None:
+    """Task 5: Restore registry state from disk on startup (crash recovery)."""
+    if not _STATE_FILE.exists():
+        return
+    try:
+        with open(_STATE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        _registry.restore_from_dict(data)
+        log.info(
+            "Scheduler state restored from {} — {} known, {} static_done, {} completed",
+            _STATE_FILE,
+            len(_registry._known),
+            len(_registry._static_done),
+            len(_registry._completed),
+        )
+    except Exception as exc:
+        log.warning("Could not restore scheduler state ({}): {}", _STATE_FILE, exc)
+
+
 def start_scheduler() -> None:
     """Add the recurring match-list poller and start APScheduler."""
+    # Task 5: Restore persisted state so we don't re-scrape after a crash.
+    _restore_state()
+
     _scheduler.add_job(
         _poll_match_list,
         trigger=IntervalTrigger(seconds=config.SCHEDULE_POLL_INTERVAL),

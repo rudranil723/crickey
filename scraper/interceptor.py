@@ -34,13 +34,17 @@ from utils.logger import log
 _API_PATTERNS: list[str] = [
     "/api/",
     "crex.live",
+    "goscorer.com",   # primary backend powering CREX (api.goscorer.com)
+    "api.crex",       # alternative CREX API subdomain
     "cricwick",       # CDN/backend alias seen on some CREX deployments
     "matchDetail",
+    "getSV3",
+    "getSC4",
+    "getBallFeeds",
     "scorecard",
     "schedules",
     "fixtures",
     "squad",
-    "live",
     "commentary",
 ]
 
@@ -90,8 +94,12 @@ class APIInterceptor:
         except Exception as exc:
             log.debug("Could not parse intercepted response from {}: {}", url, exc)
 
-    def find(self, keyword: str) -> Optional[dict]:
-        """Return the first captured response whose URL contains *keyword*."""
+    def find(self, keyword: str) -> Optional[Any]:
+        """
+        Return the first captured response whose URL contains *keyword*.
+        Returns the raw parsed JSON body (may be a dict OR a list —
+        getSC4 returns a top-level list of innings).
+        """
         for item in self.captured:
             if keyword.lower() in item["url"].lower():
                 return item["data"]

@@ -247,6 +247,15 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
     team1_key = _get(g_parts, 0)
     team2_key = _get(g_parts, 1)
 
+    # Task 4a: Detect rain delay / DLS events from the sv3 "B" result text.
+    # sv3["B"] contains the human-readable status string from the API (e.g. "Rain Stops Play",
+    # "DLS Target Revised"). We check for relevant keywords and expose them as interruption_reason.
+    b_text = (sv3.get("B") or "").lower()
+    _INTERRUPTION_KEYWORDS = ("rain", "dls", "reduced", "delay", "wet", "light", "bad light")
+    interruption_reason: Optional[str] = None
+    if any(kw in b_text for kw in _INTERRUPTION_KEYWORDS):
+        interruption_reason = sv3.get("B")  # raw string, e.g. "Rain Stops Play"
+
     return LiveScore(
         match_id=match_id,
         status_text=(
@@ -264,6 +273,7 @@ def _parse_sv3_live(sv3: dict, key_map: dict[str, str], match_id: str) -> LiveSc
         batters_on_crease=batters,
         current_bowler=bowler,
         recent_balls=recent_balls,
+        interruption_reason=interruption_reason,
     )
 
 
@@ -535,6 +545,9 @@ async def _parse_scorecard_dom(page: Page, match_id: str) -> Scorecard:
                 innings_number=idx, batting_team=batting_team,
                 bowling_team="", batting=batting, bowling=[],
             ))
+    # NOTE (Task 4d): is_partial=True signals that this scorecard was scraped mid-innings
+    # (DOM fallback path). The scheduler sets is_partial=False only after the final
+    # authoritative scrape via _job_final_scorecard(), confirming innings are complete.
     return Scorecard(match_id=match_id, innings=innings_list, is_partial=True)
 
 

@@ -161,4 +161,5 @@ class LiveScore(BaseModel):
     batters_on_crease:  list[BattingEntry] = []
     current_bowler:     Optional[BowlingEntry] = None
     recent_balls:       list[Ball] = []     # last ~20 deliveries
+    interruption_reason: Optional[str] = None  # e.g. "Rain", "DLS applied", "Reduced overs"
     scraped_at:         datetime = Field(default_factory=datetime.utcnow)
