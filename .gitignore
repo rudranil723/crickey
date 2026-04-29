@@ -21,6 +21,9 @@ playwright-browsers/
 # Scraped output (exclude from repo — too large / sensitive)
 output/
 
+# Sample output JSON files (generated locally, not committed)
+sample_output/
+
 # Logs
 logs/
 *.log

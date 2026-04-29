@@ -1,0 +1,29 @@
+{
+  "match_id": "nep-vs-oma-100th-match-mens-cwc-league-2-2023-27-match-updates-11HD",
+  "status_text": "In Progress",
+  "batting_team": "Nepal",
+  "bowling_team": "Oman",
+  "current_score": "205/4",
+  "current_overs": "38.3",
+  "run_rate": 5.33,
+  "required_run_rate": 7.81,
+  "last_5_overs": "Ov 34: 1.4.0.W.1 | Ov 35: 0.1.2.4.6 | Ov 36: 1.0.1.1.2",
+  "current_partnership": "",
+  "interruption_reason": null,
+  "batters_on_crease": [
+    { "player": "Rohit Paudel",   "runs": 55, "balls": 60, "fours": 4, "strike_rate": 91.7 },
+    { "player": "Dipendra Airee", "runs": 18, "balls": 22, "fours": 1, "strike_rate": 81.8 }
+  ],
+  "current_bowler": {
+    "player": "Bilal Khan",
+    "wickets": 2,
+    "overs": 7.3,
+    "runs": 31,
+    "economy": 4.13
+  },
+  "recent_balls": [
+    { "over": "38.1", "runs": 1, "is_wicket": false, "is_boundary": false, "is_six": false, "commentary": "Bilal Khan to Rohit Paudel, 1 run, pushed to mid-off" },
+    { "over": "38.2", "runs": 0, "is_wicket": false, "is_boundary": false, "is_six": false, "commentary": "Bilal Khan to Dipendra Airee, dot ball, defended" },
+    { "over": "38.3", "runs": 4, "is_wicket": false, "is_boundary": true,  "is_six": false, "commentary": "Bilal Khan to Dipendra Airee, FOUR! drives through covers" }
+  ]
+}

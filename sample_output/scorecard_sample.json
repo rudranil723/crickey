@@ -1,0 +1,46 @@
+{
+  "match_id": "nep-vs-oma-100th-match-mens-cwc-league-2-2023-27-match-updates-11HD",
+  "is_partial": false,
+  "innings": [
+    {
+      "innings_number": 1,
+      "batting_team": "Oman",
+      "bowling_team": "Nepal",
+      "total": "305/8",
+      "overs": "50.0",
+      "batting": [
+        { "player": "Aqib Ilyas",      "runs": 83,  "balls": 92,  "fours": 7,  "sixes": 2,  "strike_rate": 90.2  },
+        { "player": "Kashyap Prajapati","runs": 54,  "balls": 67,  "fours": 5,  "sixes": 0,  "strike_rate": 80.6  },
+        { "player": "Jatinder Singh",   "runs": 71,  "balls": 78,  "fours": 8,  "sixes": 1,  "strike_rate": 91.0  },
+        { "player": "Ayaan Khan",        "runs": 41,  "balls": 35,  "fours": 3,  "sixes": 2,  "strike_rate": 117.1 },
+        { "player": "Mohammad Nadeem",   "runs": 22,  "balls": 18,  "fours": 1,  "sixes": 1,  "strike_rate": 122.2 }
+      ],
+      "bowling": [
+        { "player": "Sagar Pun",         "wickets": 3, "overs": 10.0, "runs": 52, "economy": 5.2 },
+        { "player": "Sandeep Lamichhane","wickets": 2, "overs": 10.0, "runs": 61, "economy": 6.1 },
+        { "player": "Rohit Paudel",      "wickets": 1, "overs": 8.0,  "runs": 48, "economy": 6.0 },
+        { "player": "Dipendra Airee",    "wickets": 1, "overs": 10.0, "runs": 71, "economy": 7.1 }
+      ],
+      "extras": { "wides": 6, "no_balls": 2, "byes": 3, "leg_byes": 1, "penalty": 0, "total": 12 },
+      "is_super_over": false
+    },
+    {
+      "innings_number": 2,
+      "batting_team": "Nepal",
+      "bowling_team": "Oman",
+      "total": "213/7",
+      "overs": "42.3",
+      "batting": [
+        { "player": "Kushal Bhurtel",    "runs": 67,  "balls": 89,  "fours": 6,  "sixes": 1,  "strike_rate": 75.3 },
+        { "player": "Aasif Sheikh",      "runs": 34,  "balls": 50,  "fours": 3,  "sixes": 0,  "strike_rate": 68.0 },
+        { "player": "Rohit Paudel",      "runs": 55,  "balls": 60,  "fours": 4,  "sixes": 2,  "strike_rate": 91.7 }
+      ],
+      "bowling": [
+        { "player": "Bilal Khan",         "wickets": 3, "overs": 9.0,  "runs": 38, "economy": 4.2 },
+        { "player": "Fayyaz Butt",        "wickets": 2, "overs": 8.3,  "runs": 44, "economy": 5.2 }
+      ],
+      "extras": { "wides": 4, "no_balls": 1, "byes": 0, "leg_byes": 2, "penalty": 0, "total": 7 },
+      "is_super_over": false
+    }
+  ]
+}

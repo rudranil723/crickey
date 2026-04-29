@@ -1,0 +1,38 @@
+{
+  "match_id": "nep-vs-oma-100th-match-mens-cwc-league-2-2023-27-match-updates-11HD",
+  "announced": true,
+  "teams": [
+    {
+      "team_name": "Nepal",
+      "players": [
+        { "name": "Rohit Paudel",      "is_captain": true,  "is_keeper": false },
+        { "name": "Aasif Sheikh",       "is_captain": false, "is_keeper": true  },
+        { "name": "Kushal Bhurtel",     "is_captain": false, "is_keeper": false },
+        { "name": "Dipendra Airee",     "is_captain": false, "is_keeper": false },
+        { "name": "Sagar Pun",          "is_captain": false, "is_keeper": false },
+        { "name": "Sandeep Lamichhane", "is_captain": false, "is_keeper": false },
+        { "name": "Sompal Kami",        "is_captain": false, "is_keeper": false },
+        { "name": "Gulshan Jha",        "is_captain": false, "is_keeper": false },
+        { "name": "Pratish GC",         "is_captain": false, "is_keeper": false },
+        { "name": "Aarif Sheikh",       "is_captain": false, "is_keeper": false },
+        { "name": "Karan KC",           "is_captain": false, "is_keeper": false }
+      ]
+    },
+    {
+      "team_name": "Oman",
+      "players": [
+        { "name": "Aqib Ilyas",         "is_captain": true,  "is_keeper": false },
+        { "name": "Kashyap Prajapati",  "is_captain": false, "is_keeper": true  },
+        { "name": "Jatinder Singh",     "is_captain": false, "is_keeper": false },
+        { "name": "Ayaan Khan",         "is_captain": false, "is_keeper": false },
+        { "name": "Mohammad Nadeem",    "is_captain": false, "is_keeper": false },
+        { "name": "Bilal Khan",         "is_captain": false, "is_keeper": false },
+        { "name": "Fayyaz Butt",        "is_captain": false, "is_keeper": false },
+        { "name": "Naseem Khushi",      "is_captain": false, "is_keeper": false },
+        { "name": "Kaleemullah",        "is_captain": false, "is_keeper": false },
+        { "name": "Shoaib Khan",        "is_captain": false, "is_keeper": false },
+        { "name": "Mehran Khan",        "is_captain": false, "is_keeper": false }
+      ]
+    }
+  ]
+}
