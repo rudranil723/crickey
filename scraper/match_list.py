@@ -35,11 +35,38 @@ from utils.time_utils import parse_crex_datetime, utc_now
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# A string is score-only if it consists entirely of digits, slashes,
+# parentheses, dots, spaces, colons, semicolons, hyphens and a few
+# single-letter abbreviations used in cricket scorelines (W, C, D, wkt, ov).
+_SCORE_ONLY_RE = re.compile(r'^[\d\s/\(\)\.\-:;WCDwcdov]+$', re.IGNORECASE)
+# Strip trailing score-like suffixes from the end of a string
+_TRAILING_SCORE_RE = re.compile(r'[\d/\(\)\.\s;:C]+$')
+
+
+def _clean_team_name(raw: str | None) -> str | None:
+    """
+    Strip score artifacts from team names.
+    If the value looks entirely like a score/number, return None.
+    Multi-line values: the first line is always the team name.
+    """
+    if not raw:
+        return None
+    # Take only the first line — second line is often the score
+    cleaned = raw.strip().split('\n')[0].strip()
+    if not cleaned:
+        return None
+    # Reject if the entire string looks like a score
+    if _SCORE_ONLY_RE.fullmatch(cleaned):
+        return None
+    # Strip trailing score-like suffixes
+    cleaned = _TRAILING_SCORE_RE.sub('', cleaned).strip()
+    return cleaned or None
+
+
 def _extract_match_id(url: str) -> str:
     """Pull the last path segment as match id, e.g. 'ind-vs-aus-abc123' → 'abc123'."""
     parts = [p for p in url.rstrip("/").split("/") if p]
     slug = parts[-1] if parts else "unknown"
-    # Match IDs on CREX are alphanumeric suffixes after the last hyphen group
     m = re.search(r"([a-zA-Z0-9]{6,})$", slug)
     return m.group(1) if m else slug
 
@@ -76,7 +103,6 @@ def _parse_api_response(data: dict | list) -> list[MatchSummary]:
                 matches_raw = val
                 break
             if isinstance(val, dict):
-                # one level deeper
                 for k2 in ("matches", "fixtures", "data"):
                     inner = val.get(k2)
                     if isinstance(inner, list):
@@ -128,7 +154,6 @@ def _parse_api_response(data: dict | list) -> list[MatchSummary]:
                 raw.get("state") or
                 "upcoming"
             )
-            # Parse time — try multiple field names
             time_raw = (
                 raw.get("startTime") or
                 raw.get("startDateTime") or
@@ -167,7 +192,6 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
     log.info("Falling back to DOM parsing for match list")
     summaries: list[MatchSummary] = []
 
-    # Wait for at least one match card to appear
     card_selectors = [
         ".match-card-wrapper",
         ".match-card",
@@ -194,7 +218,6 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
         try:
             href = await card.get_attribute("href") or ""
             if "cricket-live-score" not in href:
-                # Try child anchor
                 anchor = await card.query_selector("a[href*='cricket-live-score']")
                 if anchor:
                     href = await anchor.get_attribute("href") or ""
@@ -206,29 +229,26 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
             slug = full_url.split("/cricket-live-score/")[-1].split("/")[0]
             match_id = _extract_match_id(slug)
 
-            # Team names
+            # Use specific selectors to avoid picking up score elements
             team_els = await card.query_selector_all(
-                "[class*='team-name'], [class*='teamName'], [class*='team'] span"
+                "[class*='team-name'], [class*='teamName']"
             )
             teams = [await el.inner_text() for el in team_els]
             teams = [t.strip() for t in teams if t.strip()]
 
-            team_a = teams[0] if len(teams) > 0 else "TBD"
-            team_b = teams[1] if len(teams) > 1 else "TBD"
+            team_a = _clean_team_name(teams[0]) or "TBD" if len(teams) > 0 else "TBD"
+            team_b = _clean_team_name(teams[1]) or "TBD" if len(teams) > 1 else "TBD"
 
-            # Status text
             status_el = await card.query_selector(
                 "[class*='status'], [class*='result'], [class*='match-status']"
             )
             status_raw = (await status_el.inner_text()).strip() if status_el else "upcoming"
 
-            # Series / match type
             series_el = await card.query_selector(
                 "[class*='series'], [class*='league'], [class*='competition']"
             )
             series = (await series_el.inner_text()).strip() if series_el else ""
 
-            # Date/time
             time_el = await card.query_selector(
                 "[class*='time'], [class*='date'], [class*='schedule']"
             )
