@@ -70,12 +70,39 @@ def _build_detail_url(slug: str) -> str:
     return f"{config.MATCH_DETAIL_BASE}/{slug}"
 
 
-def _map_status(raw: str) -> str:
-    raw = raw.lower()
-    if any(k in raw for k in ("live", "in progress", "batting", "bowling")):
-        return "live"
-    if any(k in raw for k in ("won", "draw", "tie", "abandoned", "no result", "result")):
-        return "completed"
+def infer_match_status(card_text: str, score_text: str, result_text: str, match_id: str = "unknown") -> str:
+    """
+    Infer if a match is live, completed, or upcoming using multiple signals.
+    """
+    try:
+        # Combine texts for a broad keyword search
+        combined_text = f"{card_text} {score_text} {result_text}".lower()
+
+        # 1. Strong "completed" signals
+        if any(k in combined_text for k in ("won by", "drawn", "tied", "abandoned", "no result", "match over", "result")):
+            log.debug("infer_match_status [{}]: 'completed' inferred from result keywords.", match_id)
+            return "completed"
+
+        # 2. Strong "live" signals
+        if any(k in combined_text for k in ("live", "in progress", "batting", "bowling", "stumps", "lunch", "tea", "rain delay", "opted to", "chose to")):
+            log.debug("infer_match_status [{}]: 'live' inferred from live keywords.", match_id)
+            return "live"
+
+        # 3. Score-based live signal (e.g., "155/7", "23-0")
+        if score_text and any(c.isdigit() for c in score_text) and any(c in score_text for c in ['/', '-']):
+            log.debug("infer_match_status [{}]: 'live' inferred from presence of score: '{}'", match_id, score_text)
+            return "live"
+
+        # 4. Fallback completed (e.g., "won")
+        if "won" in combined_text or "win" in combined_text:
+            log.debug("infer_match_status [{}]: 'completed' inferred from 'won/win'.", match_id)
+            return "completed"
+
+    except Exception as e:
+        log.error("infer_match_status [{}]: Exception during inference: {}. Defaulting to 'upcoming'.", match_id, e)
+        return "upcoming"
+
+    log.debug("infer_match_status [{}]: No strong signals found, defaulting to 'upcoming'.", match_id)
     return "upcoming"
 
 
@@ -144,12 +171,28 @@ def _parse_api_response(data: dict | list) -> list[MatchSummary]:
                 raw.get("ground") or
                 raw.get("stadium")
             )
-            status_raw = (
+            status_raw = str(
                 raw.get("status") or
                 raw.get("matchStatus") or
                 raw.get("state") or
-                "upcoming"
+                ""
             )
+            result_raw = str(
+                raw.get("result") or
+                raw.get("statusText") or
+                ""
+            )
+            score_raw = str(
+                raw.get("score") or
+                raw.get("team1Score") or
+                raw.get("team2Score") or
+                ""
+            )
+            
+            # Extract generic text from the whole raw object just in case
+            card_text = f"{status_raw} {result_raw}"
+            status = infer_match_status(card_text, score_raw, result_raw, str(match_id))
+
             # Parse time — try multiple field names
             time_raw = (
                 raw.get("startTime") or
@@ -171,7 +214,7 @@ def _parse_api_response(data: dict | list) -> list[MatchSummary]:
                 match_type=str(match_type),
                 venue=str(venue) if venue else None,
                 start_time=start_time,
-                status=_map_status(str(status_raw)),
+                status=status,
             ))
         except Exception as exc:
             log.warning("Skipping malformed match record: {} — {}", raw, exc)
@@ -238,11 +281,22 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
             team_a = _clean_team_name(teams[0]) or "TBD" if len(teams) > 0 else "TBD"
             team_b = _clean_team_name(teams[1]) or "TBD" if len(teams) > 1 else "TBD"
 
-            # Status text
+            # Status / Result texts
             status_el = await card.query_selector(
-                "[class*='status'], [class*='result'], [class*='match-status']"
+                "[class*='status'], [class*='result'], [class*='match-status'], [class*='win-text']"
             )
-            status_raw = (await status_el.inner_text()).strip() if status_el else "upcoming"
+            result_raw = (await status_el.inner_text()).strip() if status_el else ""
+
+            # Score text
+            score_el = await card.query_selector(
+                "[class*='score'], [class*='innings']"
+            )
+            score_raw = (await score_el.inner_text()).strip() if score_el else ""
+            
+            # Entire card text
+            card_text = (await card.inner_text()).strip()
+
+            status = infer_match_status(card_text, score_raw, result_raw, match_id)
 
             # Series / match type
             series_el = await card.query_selector(
@@ -266,7 +320,7 @@ async def _parse_dom(page: Page) -> list[MatchSummary]:
                 series_name=series,
                 match_type="Other",
                 start_time=start_time,
-                status=_map_status(status_raw),
+                status=status,
             ))
         except Exception as exc:
             log.warning("DOM parse error for card: {}", exc)

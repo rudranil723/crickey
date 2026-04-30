@@ -1,96 +1,73 @@
 # Crickey 🏑
 
-A production-grade **real-time cricket data scraping system** for [CREX](https://crex.com).
-Monitors the live fixture list, auto-triggers individual match scrapers when matches start,
-and continuously polls **Live** and **Scorecard** data throughout each match.
+A production-grade **real-time cricket data scraping system** and dashboard for [CREX](https://crex.com).
 
-> **Status (2026-04-29):** All 4 tabs confirmed working against a live ODI (NEP vs OMA).
-> Scorecard delivered via `getSC4` API interception (2 innings). Live score via `getSV3`
-> + `getBallFeeds`. Match Info and Squads via DOM (`.venue-detail`, `.playingxi-teams`).
+Crickey monitors the live fixture list, auto-triggers individual match scrapers when matches start, and continuously polls **Live**, **Scorecard**, and **Match Info** data throughout each match. The collected data is stored as JSON and rendered in a sleek, static HTML dashboard.
 
 ---
 
-## Architecture
+## 📸 Screenshots
 
-```
-┌──────────────────────────────────────────────────────┐
-│                      main.py                         │
-│            (entry point / CLI / signal handling)     │
-└───────────────────┬──────────────────────────────┘
-                    │
-        ┌───────────▼───────────┤
-        │      scheduler.py        │
-        │  APScheduler AsyncIO     │
-        │  ┌──────────────────┐    │
-        │  │ Match List Poller│◄───┼── every 5 min
-        │  │  (every 5 min)   │    │
-        │  └────────┬─────────┘    │
-        │           │discovers     │
-        │  ┌────────▼─────────┐    │
-        │  │  Per-match Jobs  │    │
-        │  │ ┌──────────────┐ │    │  → match_info.json
-        │  │ │ Static (once)│ │    │  → squads.json
-        │  │ │ Live  (30s)  │ │    │  → live/{ts}.json
-        │  │ │ Score (60s)  │ │    │  → scorecard/{ts}.json
-        │  │ └──────────────┘ │    │
-        │  └──────────────────┘    │
-        └──────────────────────────┘
-                    │
-        ┌───────────▼───────────┤
-        │       scraper/           │
-        │  ┌─────────────────────┐ │
-        │  │   BrowserPool       │ │  ← Semaphore(3 pages max)
-        │  │   (browser.py)      │ │
-        │  └────────┬────────────┘ │
-        │           │              │
-        │  ┌────────▼────────────┐ │
-        │  │   APIInterceptor    │ │  ← Captures raw JSON from CREX API
-        │  │   (interceptor.py)  │ │
-        │  └────────┬────────────┘ │
-        │           │              │
-        │  ┌────────▼────────────┐ │
-        │  │  match_list.py      │ │  fast-path: API JSON
-        │  │  match_detail.py    │ │  fallback:  DOM parsing
-        │  └─────────────────────┘ │
-        └──────────────────────────┘
-                    │
-        ┌───────────▼───────────┤
-        │      storage/            │
-        │  Atomic JSON writes      │
-        │  output/{match_id}/      │
-        └──────────────────────────┘
-```
+### Dashboard Overview
+![Dashboard Overview](assets/screenshots/dashboard-overview.png)
 
-### Why Playwright + API Interception?
+### Live Match Details
+![Live Modal](assets/screenshots/live-modal.png)
 
-CREX is an **Angular SPA** — all content is rendered by JavaScript after API calls.
-A plain `requests` scraper returns an empty HTML shell.
-
-Our **hybrid strategy**:
-1. Use Playwright (headless Chromium) to trigger page navigation and JavaScript execution.
-2. Attach a network interceptor **before** navigation — capture raw JSON from CREX's internal REST API (`api.goscorer.com`).
-3. Parse the structured JSON directly (fast, no HTML fragility).
-4. Fall back to DOM parsing if the API response isn't captured.
-
-This gives us **API speed** with **browser resilience**.
-
-> See [DESIGN.md](DESIGN.md) for full rationale, resource optimisation strategy,
-> and future architecture plans.
+### Team Squads
+![Squads Modal](assets/screenshots/squads-modal.png)
 
 ---
 
-## Live Run Output
+## ✨ Features
 
-Confirmed run against **NEP vs OMA, 100th ODI, CWC League-2** (in-progress match,
-2026-04-29):
+- **Real-time Scraping:** Monitors and scrapes match data every 30-60 seconds.
+- **Dynamic Dashboard:** A clean, responsive UI to view all matches (Live, Upcoming, Completed).
+- **Match Details Modal:** Deep-dive into any match with 4 dedicated tabs:
+    - **Match Info:** Venue, toss, umpires, and result.
+    - **Live:** Real-time score, run rates, and recent ball-by-ball commentary.
+    - **Scorecard:** Comprehensive batting and bowling statistics.
+    - **Squads:** Playing XI and bench information.
+- **Auto-Refresh:** The dashboard automatically updates every 30 seconds.
+- **Dark Mode Support:** Full dark mode support for a premium feel.
+- **Hybrid Scraping:** Uses Playwright for browser-based scraping with API interception for speed and reliability.
 
+---
+
+## 🛠️ How it Works
+
+1. **Discovery:** `main.py` starts the `scheduler.py`, which polls the CREX fixture list.
+2. **Scraping:** When a match is detected as live or starting soon, per-match workers are spawned to scrape:
+    - `match_info.json`
+    - `squads.json`
+    - `live_latest.json`
+    - `scorecard_latest.json`
+3. **Storage:** Data is saved atomically in the `output/` directory, organized by `match_id`.
+4. **Presentation:** `crickey-dashboard.html` fetches these JSON files and renders them using vanilla JavaScript.
+
+---
+
+## 🚀 Run Locally
+
+### 1. Scrape Data
+Ensure the scraper is running to generate the necessary JSON files:
+```bash
+python main.py
 ```
-[scrape_match_info]  Intercepted getSV3 → DOM scrape for Match Info → saved
-[scrape_squads]      Intercepted getSV3 → DOM scrape for Squads → saved
-[scrape_scorecard]   Intercepted getSV3 + getSC4 → 2 innings → saved
-[scrape_live]        Intercepted getSV3 + getBallFeeds → score=205/4 rr=14.17 → saved
-Total time: 33 seconds • 1 browser instance • 4 tabs
+
+### 2. Launch Dashboard
+Serve the project root using a local HTTP server:
+```bash
+python -m http.server 8080
 ```
+Then open `http://localhost:8080/crickey-dashboard.html` in your browser.
+
+---
+
+## 📡 Current Status
+- **UI Integration:** Fully operational on the `feature/ui-dashboard` branch.
+- **Data Rendering:** Live cards and detailed scorecards now render dynamically from local JSON.
+- **Reliability:** Hybrid API/DOM parsing ensures data availability even if CREX updates its UI.
 
 ---
 
@@ -243,6 +220,20 @@ python main.py --match "ind-vs-aus-1st-odi-abc123"
 python main.py --match "ind-vs-aus-1st-odi-abc123" --tabs info squads
 python main.py --match "ind-vs-aus-1st-odi-abc123" --tabs scorecard live
 ```
+
+### UI Dashboard Integration
+
+The frontend UI integration is maintained on the `feature/ui-dashboard` branch. It provides a production-ready static HTML dashboard that dynamically reads the scraped JSON output via HTTP.
+
+To run the dashboard:
+1. Ensure you have run the scraper to generate data in the `output/` directory.
+2. Serve the project root locally:
+```bash
+python -m http.server 8080
+```
+3. Open `http://localhost:8080/crickey-dashboard.html` in your browser.
+
+The frontend natively handles data normalization, auto-refreshing every 30 seconds, and gracefully falling back when parts of the data are missing. It connects directly to `output/schedule.json` and fetches `match_info`, `live_latest`, `scorecard`, and `squads` dynamically.
 
 ---
 

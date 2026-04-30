@@ -309,6 +309,58 @@ async function safeFetch(url) {
   } catch { return null; }
 }
 
+function normalizeLive(d) {
+  if (!d) return null;
+  return {
+    score: (d.current_score || '').split('\n').slice(0,4).join(' '), // Best effort if it's a block of text
+    batting_team: d.batting_team || '',
+    overs: d.current_overs || '',
+    crr: d.run_rate || '',
+    rrr: d.required_run_rate || '',
+    recent_balls: (d.recent_balls || []).map(b => b.commentary || '0'),
+    batsmen: (d.batters_on_crease || []).map(b => ({
+      name: b.name || b.player || '',
+      runs: b.runs, balls: b.balls, fours: b.fours, sixes: b.sixes, sr: b.strike_rate
+    })),
+    bowler: d.current_bowler ? {
+      name: d.current_bowler.name || d.current_bowler.player || '',
+      overs: d.current_bowler.overs, runs: d.current_bowler.runs, wickets: d.current_bowler.wickets, econ: d.current_bowler.economy
+    } : null,
+    partnership: d.current_partnership ? { runs: d.current_partnership.runs || 0, balls: d.current_partnership.balls || 0 } : null,
+    last_wicket: ''
+  };
+}
+
+function normalizeScorecard(d) {
+  if (!d || !d.innings || !d.innings.length) return null;
+  return {
+    innings: d.innings.map(inn => ({
+      team: inn.batting_team || 'Team',
+      total: inn.total,
+      overs: inn.overs,
+      extras: inn.extras ? inn.extras.total : 0,
+      batsmen: (inn.batting || []).map(b => ({
+        name: b.player, dismissal: b.dismissal, runs: b.runs, balls: b.balls, fours: b.fours, sixes: b.sixes, sr: b.strike_rate
+      })),
+      bowlers: (inn.bowling || []).map(b => ({
+        name: b.player, overs: b.overs, runs: b.runs, wickets: b.wickets, econ: b.economy
+      }))
+    }))
+  };
+}
+
+function normalizeSquads(d) {
+  if (!d || !d.teams || !d.teams.length) return null;
+  let out = {};
+  d.teams.forEach(t => {
+    out[t.team_name || 'Team'] = (t.players || []).map(p => ({
+      name: p.name || p,
+      is_captain: p.is_captain || false
+    }));
+  });
+  return out;
+}
+
 function formatBadgeClass(type) {
   if (!type) return 'format-t20';
   const t = type.toUpperCase();
@@ -386,7 +438,29 @@ async function loadMatches() {
     return;
   }
 
-  allMatches = Array.isArray(data) ? data : [];
+  const baseMatches = Array.isArray(data) ? data : [];
+  
+  // Hydrate matches with result and scores
+  allMatches = await Promise.all(baseMatches.map(async m => {
+    let score_a = '', score_b = '', result = '';
+    
+    // Fetch match info for result
+    const info = await safeFetch(`./output/${m.match_id}/match_info.json`);
+    if (info && info.result) result = info.result;
+    
+    // Fetch scorecard for totals
+    if (m.status !== 'upcoming') {
+      const sc = await safeFetch(`./output/${m.match_id}/scorecard_latest.json`);
+      if (sc && sc.innings && sc.innings.length > 0) {
+        score_a = `${sc.innings[0].total} (${sc.innings[0].overs || '0'})`;
+        if (sc.innings.length > 1) {
+          score_b = `${sc.innings[1].total} (${sc.innings[1].overs || '0'})`;
+        }
+      }
+    }
+    return { ...m, score_a, score_b, result };
+  }));
+
   const live = allMatches.filter(m => m.status === 'live').length;
   const upcoming = allMatches.filter(m => m.status === 'upcoming').length;
   document.getElementById('statTotal').textContent = allMatches.length;
@@ -438,7 +512,7 @@ async function openModal(matchId) {
 
   const body = document.getElementById('modalBody');
   body.innerHTML = tabs.map(t => `<div class="tab-panel ${t==='info'?'active':''}" id="tab-${t}">
-    ${t==='info'?renderInfoTab(m,info):t==='live'?renderLiveTab(liveData):t==='scorecard'?renderScorecardTab(scorecard):renderSquadsTab(squads,m)}
+    ${t==='info'?renderInfoTab(m,info):t==='live'?renderLiveTab(normalizeLive(liveData)):t==='scorecard'?renderScorecardTab(normalizeScorecard(scorecard)):renderSquadsTab(normalizeSquads(squads),m)}
   </div>`).join('');
   lucide.createIcons();
 
@@ -450,8 +524,8 @@ async function openModal(matchId) {
       const freshSc = await safeFetch(`./output/${currentModalMatchId}/scorecard_latest.json`);
       const lp = document.getElementById('tab-live');
       const sp = document.getElementById('tab-scorecard');
-      if (lp) { lp.innerHTML = renderLiveTab(fresh); lucide.createIcons(); }
-      if (sp) { sp.innerHTML = renderScorecardTab(freshSc); lucide.createIcons(); }
+      if (lp) { lp.innerHTML = renderLiveTab(normalizeLive(fresh)); lucide.createIcons(); }
+      if (sp) { sp.innerHTML = renderScorecardTab(normalizeScorecard(freshSc)); lucide.createIcons(); }
     }, 30000);
   }
 }
@@ -481,7 +555,7 @@ function renderInfoTab(m, info) {
       <div class="detail-item"><div class="detail-item-label">Status</div><div class="detail-item-value" style="text-transform:capitalize">${esc(m.status)}</div></div>
       <div class="detail-item"><div class="detail-item-label">Result</div><div class="detail-item-value">${esc(m.result||'TBD')}</div></div>
       <div class="detail-item"><div class="detail-item-label">Venue</div><div class="detail-item-value">${esc(i.venue||'—')}</div></div>
-      <div class="detail-item"><div class="detail-item-label">Start Time</div><div class="detail-item-value">${i.start_time ? new Date(i.start_time).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}) : '—'}</div></div>
+      <div class="detail-item"><div class="detail-item-label">Start Time</div><div class="detail-item-value">${i.date ? esc(i.date) : i.start_time ? new Date(i.start_time).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}) : '—'}</div></div>
       ${i.toss ? `<div class="detail-item full"><div class="detail-item-label">Toss</div><div class="detail-item-value">${esc(i.toss)}</div></div>` : ''}
       ${i.umpires ? `<div class="detail-item full"><div class="detail-item-label">Umpires</div><div class="detail-item-value">${esc(Array.isArray(i.umpires)?i.umpires.join(', '):i.umpires)}</div></div>` : ''}
     </div>
